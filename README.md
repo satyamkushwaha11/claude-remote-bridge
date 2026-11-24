@@ -79,7 +79,7 @@ npx @vscode/vsce package --allow-missing-repository --skip-license   # -> claude
 
 ### Changing the access code
 
-Delete the `ACCESS_CODE=` line from `.env` (or `AUTH_TOKEN=`, the old name for it) and start the server again. A new code is created and printed. The old code stops working at once.
+Delete the `ACCESS_CODE=` line from `.env` and start the server again. A new code is created and printed. The old code stops working at once.
 
 ### Alternative: Tailscale instead of a public link
 
@@ -162,7 +162,7 @@ Client limits: 200 KB per file, 3 MB of file contents per request, 60 files in v
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `ACCESS_CODE` | created on first start | The secret the guest needs with the link; at least 16 characters. `AUTH_TOKEN` is the old name and still works |
+| `ACCESS_CODE` | created on first start | The secret the guest needs with the link; at least 16 characters |
 | `HOST` | `127.0.0.1` | Address to listen on |
 | `PORT` | `4000` | Port to listen on |
 | `TIMEOUT_MS` | `120000` | Longest allowed Claude run, in ms; `0` = no limit |

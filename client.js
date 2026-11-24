@@ -345,15 +345,14 @@ async function loadConfig() {
     }
   }
 
-  // Environment variables override the file. AUTH_TOKEN is the old name of the access code.
-  const fromEnv = process.env.ACCESS_CODE || process.env.AUTH_TOKEN || '';
-  const fromFile = fileConfig.ACCESS_CODE || fileConfig.AUTH_TOKEN || '';
+  // Environment variables override the file.
+  const fromEnv = process.env.ACCESS_CODE || '';
+  const fromFile = fileConfig.ACCESS_CODE || '';
   let url = ARGS.setup ? null : core.normalizeUrl(process.env.BRIDGE_URL || fileConfig.BRIDGE_URL || '');
   let code = ARGS.setup ? '' : String(fromEnv || fromFile).trim();
 
   // Commands you approve later must not inherit the secret.
   delete process.env.ACCESS_CODE;
-  delete process.env.AUTH_TOKEN;
 
   if (!url || !code) {
     if (ARGS.print) {

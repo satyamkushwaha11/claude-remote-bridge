@@ -670,7 +670,6 @@ function runCommand(command, { cwd, onOutput = () => {}, signal, stdin = 'ignore
     const env = { ...process.env };
     delete env.BRIDGE_URL;
     delete env.ACCESS_CODE;
-    delete env.AUTH_TOKEN;
 
     let tail = '';
     let child;
@@ -1279,7 +1278,6 @@ function formatAnswers(questions, answers) {
 }
 
 module.exports = {
-  LIMITS,
   Connection,
   Project,
   Session,
@@ -1291,12 +1289,6 @@ module.exports = {
   needsReconnect,
   stripControl,
   normalizeUrl,
-  lineCount,
-  // exported for tests
-  parseMention,
-  BUILTIN_SKILLS,
   loadSkills,
-  parseSkillFile,
   formatAnswers,
-  _internal: { seal, unseal, deriveKey, sanitizeResponse, globToRegExp, loadGitignore, findMentions },
 };

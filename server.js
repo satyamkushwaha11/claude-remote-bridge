@@ -104,7 +104,7 @@ function argValue(name) {
   return undefined;
 }
 
-if (process.argv.includes('--gen-code') || process.argv.includes('--gen-token')) {
+if (process.argv.includes('--gen-code')) {
   console.log(generateAccessCode());
   process.exit(0);
 }
@@ -117,8 +117,7 @@ const CONFIG = {
   // can reach the server. Set HOST to your Tailscale IP to listen on the tailnet directly.
   host: process.env.HOST || '127.0.0.1',
   port: intEnv('PORT', 4000),
-  // AUTH_TOKEN is the old name of the same secret and still works.
-  accessCode: (process.env.ACCESS_CODE || process.env.AUTH_TOKEN || '').trim(),
+  accessCode: (process.env.ACCESS_CODE || '').trim(),
   share: process.argv.includes('--share'), // open a Cloudflare quick tunnel and print the link
   // Max duration of one `claude` run; 0 = no limit (a run then ends only when Claude
   // finishes, the guest presses Stop / disconnects, or the server stops).
@@ -322,7 +321,6 @@ function claudeArgs({ model, effort } = {}) {
 function claudeEnv() {
   const env = { ...process.env };
   delete env.ACCESS_CODE;
-  delete env.AUTH_TOKEN;
   return env;
 }
 
@@ -1188,7 +1186,6 @@ function normalizePublicUrl(raw) {
 function tunnelEnv(extra = {}) {
   const env = { ...process.env, ...extra };
   delete env.ACCESS_CODE;
-  delete env.AUTH_TOKEN;
   return env;
 }
 

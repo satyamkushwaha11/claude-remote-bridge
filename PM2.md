@@ -59,7 +59,7 @@ A new link can take about a minute before it works. Until then, guests see "Coul
 
 ## A link that never changes
 
-By default (`TUNNEL=quick`) every start gives a new random link. To keep one link forever, pick one of these, put the settings in `.env`, and restart: `pm2 restart claude-bridge`. Guests then enter the link once. The access code already stays the same (it is the `ACCESS_CODE` / `AUTH_TOKEN` line in `.env`).
+By default (`TUNNEL=quick`) every start gives a new random link. To keep one link forever, pick one of these, put the settings in `.env`, and restart: `pm2 restart claude-bridge`. Guests then enter the link once. The access code already stays the same (it is the `ACCESS_CODE` line in `.env`).
 
 ### Option 1: ngrok free static domain (easiest, no domain needed)
 
