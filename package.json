@@ -1,0 +1,27 @@
+{
+  "name": "claude-remote-bridge",
+  "version": "3.5.0",
+  "description": "Terminal client for a claude-remote-bridge host: Claude explores your project by itself; you review diffs and approve every change and command.",
+  "bin": {
+    "claude-bridge": "client.js"
+  },
+  "scripts": {
+    "host": "node server.js --share"
+  },
+  "files": [
+    "client.js",
+    "bridge-core.js",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": [
+    "claude",
+    "claude-code",
+    "cli",
+    "remote",
+    "bridge"
+  ],
+  "license": "UNLICENSED"
+}

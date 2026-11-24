@@ -1,0 +1,8 @@
+.env
+.bridge.json
+node_modules/
+*.tgz
+*.vsix
+vscode-extension/bridge-core.js
+claude-remote-bridge-*/
+*.log

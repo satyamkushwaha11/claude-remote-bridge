@@ -1,0 +1,145 @@
+{
+  "name": "claude-bridge-vscode",
+  "displayName": "Claude Bridge",
+  "description": "Chat with a Claude shared through claude-remote-bridge: Claude explores your workspace, you review diffs per file with undo, switch between ask / auto-accept / plan modes, pick the model, and resume past conversations.",
+  "version": "3.5.0",
+  "publisher": "claude-remote-bridge",
+  "license": "UNLICENSED",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "AI",
+    "Chat",
+    "Other"
+  ],
+  "main": "./extension.js",
+  "activationEvents": [],
+  "scripts": {
+    "vscode:prepublish": "node -e \"require('fs').copyFileSync('../bridge-core.js','bridge-core.js')\""
+  },
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "claudeBridge",
+          "title": "Claude Bridge",
+          "icon": "media/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "claudeBridge": [
+        {
+          "type": "webview",
+          "id": "claudeBridge.chat",
+          "name": "Chat"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "claudeBridge.focus",
+        "title": "Claude Bridge: Focus Chat Input"
+      },
+      {
+        "command": "claudeBridge.changeModel",
+        "title": "Claude Bridge: Change Model",
+        "icon": "$(chip)"
+      },
+      {
+        "command": "claudeBridge.skills",
+        "title": "Claude Bridge: Choose Skills",
+        "icon": "$(sparkle)"
+      },
+      {
+        "command": "claudeBridge.open",
+        "title": "Claude Bridge: Open in New Tab",
+        "icon": "media/icon.svg"
+      },
+      {
+        "command": "claudeBridge.focusSidebar",
+        "title": "Claude Bridge: Open in Sidebar"
+      },
+      {
+        "command": "claudeBridge.newChat",
+        "title": "Claude Bridge: New Conversation",
+        "icon": "$(add)"
+      },
+      {
+        "command": "claudeBridge.history",
+        "title": "Claude Bridge: Past Conversations",
+        "icon": "$(history)"
+      },
+      {
+        "command": "claudeBridge.cycleMode",
+        "title": "Claude Bridge: Switch Mode (ask / auto-accept / plan)"
+      },
+      {
+        "command": "claudeBridge.undoLast",
+        "title": "Claude Bridge: Undo Last Applied Changes"
+      },
+      {
+        "command": "claudeBridge.connect",
+        "title": "Claude Bridge: Settings (link, access code, allowed commands)",
+        "icon": "$(gear)"
+      },
+      {
+        "command": "claudeBridge.disconnect",
+        "title": "Claude Bridge: Disconnect (forget link + access code)"
+      },
+      {
+        "command": "claudeBridge.insertReference",
+        "title": "Claude Bridge: Mention File in Chat"
+      }
+    ],
+    "menus": {
+      "editor/title": [
+        {
+          "command": "claudeBridge.open",
+          "group": "navigation"
+        }
+      ],
+      "explorer/context": [
+        {
+          "command": "claudeBridge.insertReference",
+          "group": "7_modification"
+        }
+      ],
+      "editor/context": [
+        {
+          "command": "claudeBridge.insertReference",
+          "group": "9_cutcopypaste"
+        }
+      ]
+    },
+    "keybindings": [
+      {
+        "command": "claudeBridge.focus",
+        "key": "ctrl+escape",
+        "mac": "cmd+escape"
+      },
+      {
+        "command": "claudeBridge.open",
+        "key": "ctrl+alt+shift+b",
+        "mac": "cmd+alt+shift+b"
+      },
+      {
+        "command": "claudeBridge.insertReference",
+        "key": "alt+k",
+        "when": "editorTextFocus"
+      },
+      {
+        "command": "claudeBridge.insertReference",
+        "key": "ctrl+alt+shift+k",
+        "mac": "cmd+alt+shift+k",
+        "when": "editorTextFocus"
+      },
+      {
+        "command": "claudeBridge.changeModel",
+        "key": "ctrl+alt+shift+m",
+        "mac": "cmd+alt+shift+m"
+      }
+    ]
+  }
+}
