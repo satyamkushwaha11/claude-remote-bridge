@@ -1,6 +1,6 @@
 {
   "name": "claude-remote-bridge",
-  "version": "3.5.0",
+  "version": "3.6.0",
   "description": "Terminal client for a claude-remote-bridge host: Claude explores your project by itself; you review diffs and approve every change and command.",
   "bin": {
     "claude-bridge": "client.js"

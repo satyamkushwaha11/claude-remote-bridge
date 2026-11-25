@@ -65,16 +65,16 @@ To keep it running in the background (and start it after a reboot), use pm2: see
 ### 2. Build the guest packages (once per version)
 
 ```bash
-npm pack                                  # -> claude-remote-bridge-3.5.0.tgz (terminal client)
+npm pack                                  # -> claude-remote-bridge-3.6.0.tgz (terminal client)
 cd vscode-extension
-npx @vscode/vsce package --allow-missing-repository --skip-license   # -> claude-bridge-vscode-3.5.0.vsix
+npx @vscode/vsce package --allow-missing-repository --skip-license   # -> claude-bridge-vscode-3.6.0.vsix
 ```
 
 ### 3. Send the guest
 
 - the link
 - the access code (over a private channel)
-- `claude-bridge-vscode-3.5.0.vsix` for VS Code, and/or `claude-remote-bridge-3.5.0.tgz` for the terminal
+- `claude-bridge-vscode-3.6.0.vsix` for VS Code, and/or `claude-remote-bridge-3.6.0.tgz` for the terminal
 - `CLIENT-SETUP.md`, the guest's guide
 
 ### Changing the access code
@@ -102,7 +102,7 @@ The full guest guide is [CLIENT-SETUP.md](CLIENT-SETUP.md). In short:
 **VS Code**
 
 ```bash
-code --install-extension claude-bridge-vscode-3.5.0.vsix
+code --install-extension claude-bridge-vscode-3.6.0.vsix
 ```
 
 Open the project folder, click the **Claude Bridge** icon in the activity bar, paste the link and the access code, and click **Connect**. The panel works on its own; the terminal client is not needed.
@@ -110,7 +110,8 @@ Open the project folder, click the **Claude Bridge** icon in the activity bar, p
 - Claude explores the workspace by itself. The file open in the editor (and any selection) is included automatically; `@` picks other files.
 - Proposed changes appear as diff cards with **Apply** / **Discard** and a button for VS Code's diff editor. Files with unsaved editor changes are never overwritten.
 - Suggested commands appear as cards with **Run** / **Skip**; output streams into the card.
-- Modes: ask before edits, auto-accept edits (with Undo), plan mode (plan + task list, approve before anything changes). Shift+Tab switches.
+- Modes: ask before edits, auto-accept edits (with Undo), auto mode (no approvals; risky commands still ask), plan mode (plan + task list, approve in a popup before anything changes). Shift+Tab switches.
+- Claude keeps working step by step until the task is done: once a step's changes and commands are decided, the results go back to it automatically. No need to type "continue".
 - Model and effort picker (the host decides which models are allowed with `ALLOWED_MODELS`), per-file accept/reject, Undo, saved conversation history, `/` commands, always-allowed commands, VS Code problems and selections sent with the message, Alt+K to mention selected lines, Ctrl+Esc to focus.
 - Claude can ask clarifying questions; they appear as a popup with options. Skills (built-in, `~/.claude/skills`, project `.claude/skills`) can be switched on several at a time with `/skills`.
 - `+` starts a new chat; the clock shows past chats; the gear holds settings. `Ctrl+Alt+Shift+B` opens the chat in an editor tab.
@@ -118,7 +119,7 @@ Open the project folder, click the **Claude Bridge** icon in the activity bar, p
 **Terminal**
 
 ```bash
-npm install -g ./claude-remote-bridge-3.5.0.tgz
+npm install -g ./claude-remote-bridge-3.6.0.tgz
 claude-bridge --setup           # enter the link and the access code
 cd your-project && claude-bridge
 ```
@@ -131,7 +132,7 @@ cd your-project && claude-bridge
 
 1. Install Termux.
 2. Run `pkg install nodejs`.
-3. Copy the package file to the phone and run `npm install -g ./claude-remote-bridge-3.5.0.tgz`.
+3. Copy the package file to the phone and run `npm install -g ./claude-remote-bridge-3.6.0.tgz`.
 4. Run `cd your-project && claude-bridge`.
 
 **iPhone**

@@ -1,8 +1,8 @@
 {
   "name": "claude-bridge-vscode",
   "displayName": "Claude Bridge",
-  "description": "Chat with a Claude shared through claude-remote-bridge: Claude explores your workspace, you review diffs per file with undo, switch between ask / auto-accept / plan modes, pick the model, and resume past conversations.",
-  "version": "3.5.0",
+  "description": "Chat with a Claude shared through claude-remote-bridge: Claude explores your workspace and keeps working step by step until the task is done. Ask / auto-accept / auto / plan modes, per-file diffs with undo, question popups, model picker, and saved conversations.",
+  "version": "3.6.0",
   "publisher": "claude-remote-bridge",
   "license": "UNLICENSED",
   "engines": {
@@ -73,7 +73,11 @@
       },
       {
         "command": "claudeBridge.cycleMode",
-        "title": "Claude Bridge: Switch Mode (ask / auto-accept / plan)"
+        "title": "Claude Bridge: Switch Mode (ask / auto-accept / auto / plan)"
+      },
+      {
+        "command": "claudeBridge.autoMode",
+        "title": "Claude Bridge: Turn On Auto Mode (no approvals)"
       },
       {
         "command": "claudeBridge.undoLast",
@@ -140,6 +144,29 @@
         "key": "ctrl+alt+shift+m",
         "mac": "cmd+alt+shift+m"
       }
-    ]
+    ],
+    "configuration": {
+      "title": "Claude Bridge",
+      "properties": {
+        "claudeBridge.autoMode.maxSteps": {
+          "type": "number",
+          "default": 30,
+          "minimum": 1,
+          "maximum": 500,
+          "markdownDescription": "How many steps Claude may take for one message before it pauses (each step = one answer from Claude plus applying its edits and running its commands). Send `continue` to go on after a pause."
+        },
+        "claudeBridge.autoMode.commandTimeoutSeconds": {
+          "type": "number",
+          "default": 300,
+          "minimum": 0,
+          "markdownDescription": "In auto mode, a command that runs without your click is stopped after this many seconds (`0` = no limit), so a dev server or watcher cannot block the task."
+        },
+        "claudeBridge.autoMode.askBeforeRiskyCommands": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "In auto mode, still ask before commands that are hard to undo or reach outside the project: `sudo`, `git push`, `git reset --hard`, `rm -rf` outside the folder, publishing, global installs, `curl … | sh` and similar. Turn off to run everything without asking."
+        }
+      }
+    }
   }
 }

@@ -12,8 +12,8 @@ From the host (the person sharing their Claude):
 | --- | --- |
 | Link | `https://some-random-words.trycloudflare.com` |
 | Access code | `7K2QF-9XHTM-4BWZ8-PLR3D-0CVN6` (or a long string of letters and digits) |
-| VS Code extension | `claude-bridge-vscode-3.5.0.vsix` |
-| Terminal client (optional) | `claude-remote-bridge-3.5.0.tgz` |
+| VS Code extension | `claude-bridge-vscode-3.6.0.vsix` |
+| Terminal client (optional) | `claude-remote-bridge-3.6.0.tgz` |
 
 You need both the link and the access code. Neither works alone.
 
@@ -24,7 +24,7 @@ Nothing else to install: the extension works on its own.
 ### 1. Install the extension
 
 ```bash
-code --install-extension claude-bridge-vscode-3.5.0.vsix
+code --install-extension claude-bridge-vscode-3.6.0.vsix
 ```
 
 Or in VS Code: open the Extensions view, click the `…` menu, choose **Install from VSIX…** and pick the file.
@@ -74,17 +74,36 @@ Keep your project in git so you can review with `git diff` and undo with `git ch
 
 ### 5. Run commands
 
-When Claude suggests a command (like `npm test`), it appears as a card. Click **Run** to run it in your project folder, **Always allow** to run it and never be asked about that exact command again in this project, or **Skip**. The output appears in the card, and **Stop** ends a long-running command. Claude sees the result with your next message, so you can follow up with something like "fix the failing test".
+When Claude suggests a command (like `npm test`), it appears as a card. Click **Run** to run it in your project folder, **Always allow** to run it and never be asked about that exact command again in this project, or **Skip**. The output appears in the card, and **Stop** ends a long-running command.
+
+### Claude keeps going on its own
+
+You never need to type "continue". As soon as every change and command of a step is decided (applied, run, or skipped), the results go back to Claude automatically and it carries on with the next step: it reads the test output, fixes what failed, and so on until the task is done. If you reject a change or skip a command in **Ask before edits** or **Auto-accept edits** mode, Claude stops and waits for you to say what to do instead.
+
+When Claude needs a decision from you (which library, which approach, which option after some research), it asks in a popup that takes the place of the message box. Pick an option or type your own answer, and Claude continues straight away.
+
+For safety, Claude pauses after 30 steps for one message (setting `claudeBridge.autoMode.maxSteps`). Send `continue` to go on. **Esc** or the stop button stops it at any time.
 
 ### Modes
 
-The button at the bottom left of the message box switches between three modes. **Shift+Tab** cycles through them.
+The button at the bottom left of the message box switches between four modes. **Shift+Tab** cycles through them.
 
 | Mode | What happens |
 | --- | --- |
 | **Ask before edits** (default) | Every change waits for you to accept it |
 | **Auto-accept edits** | Changes are written right away; the card shows **Undo**. Commands still ask |
-| **Plan mode** | Claude explores and writes a plan with a task list, and changes nothing. A **Ready to code?** card lets you approve it (asking before edits, or auto-accepting) or keep planning |
+| **Auto mode** | Claude works on its own, like Claude Code's auto mode: changes are written and commands run without asking, and it keeps going until the task is done. Risky commands (`sudo`, `git push`, `git reset --hard`, `rm -rf` outside the project, publishing, global installs, `curl … \| sh`) still ask. A command that runs without a click is stopped after 5 minutes. VS Code asks you to confirm the first time you turn it on |
+| **Plan mode** | Claude explores and writes a plan with a task list, and changes nothing. If the plan depends on a choice, it asks in a popup first. A **Ready to code?** popup then lets you approve the plan in auto mode, auto-accept edits, or ask before edits (Claude then implements it without further prompting), or keep planning |
+
+Auto mode settings (VS Code settings, search for "Claude Bridge"):
+
+| Setting | Default | Meaning |
+| --- | --- | --- |
+| `claudeBridge.autoMode.maxSteps` | `30` | Steps per message before Claude pauses (in every mode) |
+| `claudeBridge.autoMode.commandTimeoutSeconds` | `300` | Time limit for commands that run without a click; `0` = none |
+| `claudeBridge.autoMode.askBeforeRiskyCommands` | `true` | Turn off to let auto mode run every command without asking |
+
+Auto mode runs commands on your machine without showing them to you first. Use it in a project that is in git, and do not use it on a project you would not let Claude change freely.
 
 ### Model and effort
 
@@ -126,7 +145,7 @@ Type `/` in the message box:
 | --- | --- |
 | `/new` | New conversation |
 | `/history` | Open a past conversation |
-| `/plan`, `/auto`, `/ask` | Switch mode |
+| `/plan`, `/auto`, `/accept-edits`, `/ask` | Switch mode (plan, auto mode, auto-accept edits, ask before edits) |
 | `/model` | Choose the model and effort |
 | `/skills` | Choose skills (several at once) |
 | `/<skill-name>` | Turn that skill on or off |
@@ -168,7 +187,7 @@ Needs Node.js 18 or newer. Check with `node --version`.
 ### 1. Install
 
 ```bash
-npm install -g ./claude-remote-bridge-3.5.0.tgz
+npm install -g ./claude-remote-bridge-3.6.0.tgz
 ```
 
 If `npm install -g` fails with a permission error on Linux or macOS, run it with `sudo`.

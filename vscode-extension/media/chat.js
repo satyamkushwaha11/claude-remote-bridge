@@ -41,22 +41,26 @@
     slash: svg(`<path d="m10.5 2.5-5 11" ${S}/>`, 13),
     skill: svg('<path d="M8 1.5 9.5 6.5 14.5 8 9.5 9.5 8 14.5 6.5 9.5 1.5 8 6.5 6.5Z" fill="currentColor"/>', 12),
     ask: svg(`<circle cx="8" cy="8" r="6.2" ${S}/><path d="M6.3 6.2a1.8 1.8 0 1 1 2.4 1.7c-.5.2-.7.6-.7 1.1v.4" ${S}/><circle cx="8" cy="11.4" r=".7" fill="currentColor"/>`, 14),
+    infinity: svg(`<path d="M5 5.5C3.6 5.5 2.5 6.6 2.5 8s1.1 2.5 2.5 2.5c2.5 0 3.5-5 6-5 1.4 0 2.5 1.1 2.5 2.5s-1.1 2.5-2.5 2.5c-2.5 0-3.5-5-6-5Z" ${S}/>`, 13),
+    shield: svg(`<path d="M8 1.8 13 3.6v4c0 3.2-2.2 5.6-5 6.6-2.8-1-5-3.4-5-6.6v-4Z" ${S}/><path d="M8 5.5v3M8 10.6v.1" ${S}/>`, 13),
     retry: svg(`<path d="M13 8a5 5 0 1 1-1.5-3.6M13 2.5v3h-3" ${S}/>`, 13),
   };
 
   const MODES = {
     default: { label: 'Ask before edits', icon: I.hand, tip: 'Claude asks before every change. Shift+Tab to switch.' },
     auto: { label: 'Auto-accept edits', icon: I.bolt, tip: 'Claude\'s file changes are applied right away (you can still Undo). Commands still ask. Shift+Tab to switch.' },
+    agent: { label: 'Auto mode', icon: I.infinity, tip: 'Claude works on its own: edits are applied and commands run without asking, and it keeps going until the task is done. Risky commands still ask. Esc stops. Shift+Tab to switch.' },
     plan: { label: 'Plan mode', icon: I.map, tip: 'Claude explores and writes a plan; nothing changes until you approve it. Shift+Tab to switch.' },
   };
-  const MODE_ORDER = ['default', 'auto', 'plan'];
+  const MODE_ORDER = ['default', 'auto', 'agent', 'plan'];
   const EFFORTS = [['', 'Default'], ['low', 'Low'], ['medium', 'Medium'], ['high', 'High'], ['xhigh', 'Extra high'], ['max', 'Max']];
 
   const SLASH = [
     { cmd: '/new', alias: ['/clear'], text: 'Start a new conversation', run: () => post('new-chat') },
     { cmd: '/history', text: 'Open a previous conversation', run: () => openHistory() },
     { cmd: '/plan', text: 'Switch to plan mode', run: () => post('set-mode', { mode: 'plan' }) },
-    { cmd: '/auto', text: 'Switch to auto-accept edits', run: () => post('set-mode', { mode: 'auto' }) },
+    { cmd: '/auto', text: 'Switch to auto mode (no approvals, keeps going until done)', run: () => post('set-mode', { mode: 'agent' }) },
+    { cmd: '/accept-edits', text: 'Switch to auto-accept edits', run: () => post('set-mode', { mode: 'auto' }) },
     { cmd: '/ask', text: 'Switch to ask before edits', run: () => post('set-mode', { mode: 'default' }) },
     { cmd: '/model', text: 'Choose the model and effort', run: () => openMenu('model') },
     { cmd: '/skills', text: 'Choose skills (tick several)', run: () => openMenu('skills') },
@@ -91,6 +95,8 @@
     skills: [],
     activeSkills: [],
     pendingQuestions: null,
+    pendingPlan: null,
+    autoRunning: false,
     reconnectReason: '',
   };
   let skillFilter = '';
@@ -479,14 +485,15 @@
   }
 
   function renderCommand(item) {
+    const autoLabel = item.auto === true ? 'always allowed' : item.auto || '';
     const states = {
-      pending: `<button class="btn btn-primary" data-action="run" data-id="${item.id}">${I.term} Run</button>
+      pending: `${item.risk ? `<span class="risk-note" title="Auto mode asks before commands like this">${I.shield} Needs your OK: ${esc(item.risk)}</span><span class="break"></span>` : ''}<button class="btn btn-primary" data-action="run" data-id="${item.id}">${I.term} Run</button>
                 <button class="btn btn-ghost" data-action="allow-command" data-id="${item.id}" title="Run now and never ask again for this exact command in this workspace">Always allow</button>
                 <button class="btn btn-ghost" data-action="skip" data-id="${item.id}">Skip</button>`,
       running: `<span class="pulse"></span><span class="shimmer">Running</span><span class="elapsed" data-since="${item.startedAt}">${elapsed(item.startedAt)}</span>
                 <span class="spacer"></span><button class="btn btn-ghost btn-small" data-action="stop-command" data-id="${item.id}">Stop</button>`,
-      done: `<span class="${item.code === 0 ? 'result-ok' : 'result-bad'}">${item.code === 0 ? I.check : ''}</span><span class="${item.code === 0 ? 'note' : 'result-bad'}">${esc(item.status || '')}</span>${item.auto ? '<span class="spacer"></span><span class="note">always allowed</span>' : ''}`,
-      skipped: '<span class="note">Skipped</span>',
+      done: `<span class="${item.code === 0 ? 'result-ok' : 'result-bad'}">${item.code === 0 ? I.check : ''}</span><span class="${item.code === 0 ? 'note' : 'result-bad'}">${esc(item.status || '')}</span>${autoLabel ? `<span class="spacer"></span><span class="note">${esc(autoLabel)}</span>` : ''}`,
+      skipped: `<span class="note">${esc(item.note || 'Skipped')}</span>`,
       expired: '<span class="note">Not run (from an earlier session)</span>',
       blocked: '<span class="result-bad">Blocked: the command contains hidden control characters.</span>',
     };
@@ -494,25 +501,43 @@
       <div class="card ${item.state === 'pending' ? 'pending' : ''}">
         <div class="cmd-line"><span class="prompt">$</span><span>${esc(item.command)}</span></div>
         ${item.output ? `<pre class="cmd-out">${esc(item.output)}</pre>` : ''}
-        <div class="card-foot">${states[item.state] || ''}</div>
+        <div class="card-foot ${item.risk && item.state === 'pending' ? 'wrap' : ''}">${states[item.state] || ''}</div>
       </div>`;
   }
 
   function renderPlanApproval(item) {
     if (item.state !== 'pending') {
-      const text = { approved: 'Plan approved · ask before edits', 'approved-auto': 'Plan approved · auto-accept edits', kept: 'Still planning', expired: 'Plan from an earlier session' }[item.state] || '';
+      const text = {
+        approved: 'Plan approved · ask before edits',
+        'approved-auto': 'Plan approved · auto-accept edits',
+        'approved-agent': 'Plan approved · auto mode',
+        kept: 'Still planning',
+        expired: 'Plan from an earlier session',
+      }[item.state] || '';
       return `<div class="note dotted muted">${esc(text)}</div>`;
     }
-    return `
-      <div class="card pending plan-card">
-        <div class="card-head"><span class="card-title">${I.map} Ready to code?</span></div>
-        <div class="plan-body note">Claude made a plan and changed nothing. Choose how to continue:</div>
-        <div class="card-foot wrap">
-          <button class="btn btn-primary" data-action="plan-decision" data-id="${item.id}" data-decision="approve">Yes, ask before edits</button>
-          <button class="btn btn-ghost" data-action="plan-decision" data-id="${item.id}" data-decision="auto">Yes, auto-accept edits</button>
-          <button class="btn btn-ghost" data-action="plan-decision" data-id="${item.id}" data-decision="keep">No, keep planning</button>
-        </div>
-      </div>`;
+    return `<div class="note dotted muted">${I.map} Plan ready: choose how to continue below</div>`;
+  }
+
+  /** The docked popup that replaces the message box while a plan waits for approval. */
+  function renderPlanPanel(item) {
+    const choice = (decision, label, desc, primary) => `
+      <button class="q-option plan-choice ${primary ? 'on' : ''}" data-action="plan-decision" data-id="${item.id}" data-decision="${decision}">
+        <span class="q-text"><span class="q-label">${label}</span><span class="q-desc">${desc}</span></span>
+      </button>`;
+    return `<div class="question-panel plan-panel" id="question-panel">
+      <div class="q-panel-head">${I.map}<span>Ready to code? Claude made a plan and changed nothing yet.</span></div>
+      <div class="q-blocks"><div class="q-block"><div class="q-options">
+        ${choice('agent', `${I.infinity} Yes, auto mode`, 'Claude implements the whole plan on its own: no approvals, it keeps going until done.', true)}
+        ${choice('auto', `${I.bolt} Yes, auto-accept edits`, 'Edits are applied right away; commands still ask.')}
+        ${choice('approve', `${I.hand} Yes, ask before edits`, 'You approve every change and command; Claude continues after each one.')}
+      </div></div></div>
+      <div class="q-actions">
+        <button class="btn btn-ghost" data-action="plan-decision" data-id="${item.id}" data-decision="keep">No, keep planning</button>
+        <span class="spacer"></span>
+        <span class="note">then type what to change</span>
+      </div>
+    </div>`;
   }
 
   function renderQuestionsItem(item) {
@@ -681,6 +706,11 @@
     if (pendingQ) {
       return `<div class="composer">${renderQuestionPanel(pendingQ)}</div>`;
     }
+    const pendingP = !state.busy && state.pendingPlan && items.find((i) => i.id === state.pendingPlan && i.kind === 'plan-approval' && i.state === 'pending');
+    if (pendingP) {
+      return `<div class="composer">${renderTodos()}${renderPlanPanel(pendingP)}</div>`;
+    }
+    const working = state.busy || state.autoRunning;
     const activeSkills = (state.activeSkills || []).map((id) => (state.skills || []).find((k) => k.id === id)).filter(Boolean);
     const skillChips = activeSkills.length
       ? `<div class="skill-chips">${activeSkills.map((k) => `<span class="skill-chip" title="${esc(k.description || k.source)}">${I.skill}<span>${esc(k.name)}</span><button class="chip-x" data-action="toggle-skill" data-id="${esc(k.id)}" title="Turn off">${I.x}</button></span>`).join('')}</div>`
@@ -692,14 +722,14 @@
         ${renderMenu()}
         <div class="composer-box mode-${state.mode}">
           ${skillChips}
-          <textarea id="input" rows="1" placeholder="${state.busy ? 'Claude is working…' : state.mode === 'plan' ? 'Describe what to plan…' : 'Ask Claude about this project…'}"></textarea>
+          <textarea id="input" rows="1" placeholder="${state.busy ? 'Claude is working…' : state.autoRunning ? 'Claude is applying changes and running commands…' : state.mode === 'plan' ? 'Describe what to plan…' : state.mode === 'agent' ? 'Give Claude a task: it works until done…' : 'Ask Claude about this project…'}"></textarea>
           <div class="composer-row">
             <button class="chip mode ${state.mode}" data-action="cycle-mode" title="${esc(mode.tip)}">${mode.icon}<span>${mode.label}</span></button>
             ${chip}
             <button class="chip skills ${activeSkills.length ? 'on' : ''}" data-action="toggle-skills-menu" title="Skills: instruction sets Claude follows (tick several)">${I.skill}<span>${activeSkills.length ? `${activeSkills.length} skill${activeSkills.length === 1 ? '' : 's'}` : 'Skills'}</span></button>
             <span class="spacer"></span>
             <button class="chip model" data-action="toggle-model-menu" title="Model and effort">${I.cpu}<span>${esc(state.model ? modelName(state.model) : 'Default')}${state.effort ? ` · ${esc(state.effort)}` : ''}</span>${I.down}</button>
-            ${state.busy
+            ${working
               ? `<button class="send stop" data-action="stop" title="Stop (Esc)">${I.stop}</button>`
               : `<button class="send" data-action="send" id="send" title="Send (Enter)">${I.send}</button>`}
           </div>
@@ -863,7 +893,7 @@
 
   function showHelp() {
     const text =
-      'Enter send · Shift+Enter new line · Esc stop · Shift+Tab switch mode (ask / auto-accept / plan) · @ mention a file (Alt+K in the editor inserts the selection) · / commands: ' +
+      'Enter send · Shift+Enter new line · Esc stop · Shift+Tab switch mode (ask / auto-accept / auto / plan) · @ mention a file (Alt+K in the editor inserts the selection) · / commands: ' +
       SLASH.map((s) => s.cmd).join(' ') + ' and /<skill-name> to toggle a skill' +
       ' · Ctrl+Esc focuses this chat.';
     upsertItem({ id: `help-${Date.now()}`, kind: 'info', text });
@@ -1111,7 +1141,7 @@
     if (event.target.id !== 'input') {
       if (event.key === 'Escape') {
         if (menu) closePopups();
-        else if (state.busy) post('stop');
+        else if (state.busy || state.autoRunning) post('stop');
       }
       return;
     }
@@ -1142,7 +1172,7 @@
     if (event.key === 'Escape') {
       event.preventDefault();
       if (menu) closePopups();
-      else if (state.busy) post('stop');
+      else if (state.busy || state.autoRunning) post('stop');
       return;
     }
     if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {

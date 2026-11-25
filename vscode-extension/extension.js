@@ -10,7 +10,12 @@
  *   - Claude explores the workspace folder by itself: it gets the file list and
  *     asks for files and searches, which this extension answers from the local
  *     disk (secrets, .git, node_modules and binaries are never read).
- *   - Modes: "Ask before edits" (default), "Auto-accept edits", "Plan mode".
+ *   - Modes: "Ask before edits" (default), "Auto-accept edits", "Auto mode"
+ *     (edits applied and commands run without asking; risky commands still ask),
+ *     "Plan mode".
+ *   - Agent loop: once every change and command of a step is decided, the
+ *     results go back to Claude automatically and it keeps working until the
+ *     task is done (capped by claudeBridge.autoMode.maxSteps).
  *   - Proposed edits appear as diff cards with per-file Accept/Reject and Undo.
  *     Files with unsaved edits in the editor are never overwritten.
  *   - Proposed commands appear as cards and run in the workspace folder only
@@ -34,6 +39,7 @@ const EFFORT_KEY = 'claudeBridge.effort'; // globalState
 const MODE_KEY = 'claudeBridge.mode'; // workspaceState
 const ALLOWED_COMMANDS_KEY = 'claudeBridge.allowedCommands'; // workspaceState
 const ACTIVE_SKILLS_KEY = 'claudeBridge.activeSkills'; // workspaceState
+const AUTO_MODE_OK_KEY = 'claudeBridge.autoModeConfirmed'; // globalState: the one-time warning was accepted
 const MAX_ACTIVE_SKILLS = 8;
 const DIFF_SCHEME = 'claude-bridge';
 const PREVIEW_LINES_PER_FILE = 400; // diff lines sent to the panel per file
@@ -43,7 +49,57 @@ const SELECTION_CHARS = 6_000; // selected text passed to Claude
 const MAX_PROBLEMS = 15; // diagnostics of the active file passed to Claude
 const MAX_SAVED_CHATS = 50;
 const MAX_UNDO_BYTES = 4 * 1024 * 1024; // undo data kept per saved chat
-const MODES = ['default', 'auto', 'plan'];
+const MODES = ['default', 'auto', 'agent', 'plan'];
+const MAX_IDLE_CONTINUES = 2; // follow-ups in a row where Claude did nothing but still has open tasks
+
+/** Auto-mode settings from VS Code's configuration. */
+function autoSettings() {
+  const config = vscode.workspace.getConfiguration ? vscode.workspace.getConfiguration('claudeBridge') : { get: () => undefined };
+  const num = (key, fallback, min, max) => {
+    const v = Number(config.get(key));
+    return Number.isFinite(v) ? Math.min(max, Math.max(min, Math.round(v))) : fallback;
+  };
+  return {
+    maxSteps: num('autoMode.maxSteps', 30, 1, 500),
+    commandTimeoutSeconds: num('autoMode.commandTimeoutSeconds', 300, 0, 86_400),
+    askBeforeRisky: config.get('autoMode.askBeforeRiskyCommands') !== false,
+  };
+}
+
+/**
+ * Why a command should still need the user's OK in auto mode, or '' if it may run.
+ * Not a sandbox: it catches the obvious ways to lose work, touch the system or publish.
+ */
+function riskyReason(command) {
+  const c = String(command);
+  for (const segment of c.split(/&&|\|\||[;|&\n]/)) {
+    const words = segment.trim().split(/\s+/);
+    const at = words.indexOf('rm');
+    if (at < 0) continue;
+    const args = words.slice(at + 1);
+    const recursive = args.some((a) => /^-[a-zA-Z]*[rR]/.test(a) || a === '--recursive');
+    const outside = args.some((a) => !a.startsWith('-') && (/^(\/|~|\$|\.\.)/.test(a) || a === '*' || a === '.' || a === './'));
+    if ((recursive && outside) || args.includes('--no-preserve-root')) return 'deletes files outside the project or the whole folder';
+  }
+  const checks = [
+    [/(^|[\s;&|(])(sudo|doas|su)(\s|$)/, 'runs with other privileges'],
+    [/\b(mkfs|fdisk|parted|diskutil)\b|\bdd\s[^;&|]*\bof=|>\s*\/dev\/(sd|nvme|disk|hd)/, 'writes to a disk'],
+    [/\b(shutdown|reboot|poweroff|halt)\b/, 'shuts down the machine'],
+    [/:\(\)\s*\{/, 'fork bomb'],
+    [/\bgit\s+push\b/, 'pushes to a remote repository'],
+    [/\bgit\s+(reset\s+--hard|clean\s+-[a-zA-Z]*f|checkout\s+--\s|stash\s+(drop|clear)|branch\s+-D|filter-branch|filter-repo)/, 'can throw away uncommitted work'],
+    [/\b(npm|yarn|pnpm|cargo)\s+publish\b|\btwine\s+upload\b|\bgh\s+(pr|release|repo|issue)\s+(create|merge|delete|close|edit)\b/, 'publishes or changes something online'],
+    [/\b(curl|wget)\b[^;&]*\|\s*(sudo\s+)?(ba|z|da)?sh\b/, 'runs a downloaded script'],
+    [/\bchown\b|\bchmod\s+(-R\s+)?[0-7]?777\b/, 'changes ownership or opens permissions'],
+    [/\b(kubectl|helm)\s+(delete|uninstall|apply)\b|\bterraform\s+(apply|destroy)\b|\bdocker\s+(system|volume|image)\s+prune\b/, 'changes infrastructure'],
+    [/\b(systemctl|launchctl|crontab)\b|(^|\s)service\s/, 'changes system services'],
+    [/\b(kill|killall|pkill)\b/, 'stops other processes'],
+    [/\b(npm|pnpm|yarn)\s+(i|install|add)\s+[^;&|]*(-g|--global)\b|\byarn\s+global\b|\bpip3?\s+install\s+[^;&|]*--user\b/, 'installs globally on the machine'],
+    [/>>?\s*(~|\$HOME|\/(?!dev\/null\b))/, 'writes a file outside the project'],
+  ];
+  for (const [pattern, reason] of checks) if (pattern.test(c)) return reason;
+  return '';
+}
 const EFFORTS = ['', 'low', 'medium', 'high', 'xhigh', 'max'];
 
 const newId = () => crypto.randomBytes(6).toString('hex');
@@ -175,8 +231,15 @@ class BridgeController {
       skills: [], // [{ id, name, description, source }] — instructions stay here
       activeSkills: context.workspaceState.get(ACTIVE_SKILLS_KEY) || [],
       pendingQuestions: null, // id of a questions item waiting for answers
+      pendingPlan: null, // id of a plan-approval item waiting for a decision
+      autoRunning: false, // auto mode is applying edits / running commands between requests
     };
     this.skills = []; // full skills, with instructions
+    /**
+     * The task in progress: one user message and every automatic follow-up.
+     * { request, steps, idle, stopped, step: { changesId, commandIds, declined, continued, applied, running } }
+     */
+    this.turn = null;
   }
 
   // ------------------------------------------------------------------ plumbing
@@ -314,7 +377,8 @@ class BridgeController {
     });
     if (this.session) this.session.restore(chat.session);
     this.post({ type: 'reset', items: this.items });
-    this.setState({ busy: false, chatTitle: chat.title, todos: this.session ? this.session.todos : [], pendingQuestions: null });
+    this.turn = null;
+    this.setState({ busy: false, chatTitle: chat.title, todos: this.session ? this.session.todos : [], pendingQuestions: null, pendingPlan: null, autoRunning: false });
   }
 
   deleteChat(id) {
@@ -544,7 +608,11 @@ class BridgeController {
 
   // -------------------------------------------------------------- conversation
 
-  async send(text, { mode, hideUser = false } = {}) {
+  /**
+   * Send a message. `continuation` keeps the current task (automatic follow-ups,
+   * question answers, plan approval); anything else starts a new one.
+   */
+  async send(text, { mode, hideUser = false, continuation = false } = {}) {
     if (this.state.busy) return;
     if (!this.connection) {
       this.setState({ view: 'connect' });
@@ -555,8 +623,23 @@ class BridgeController {
       return;
     }
     const effectiveMode = mode || this.state.mode;
+    if (!continuation || !this.turn) {
+      if (this.turn) this.turn.stopped = true; // ends the auto-run loop of the previous task
+      this.turn = { request: text, steps: 0, idle: 0, stopped: false, step: null };
+    }
+    const turn = this.turn;
+    turn.steps += 1;
+    turn.stopped = false;
     this.lastPrompt = text;
+    this.lastOptions = { mode, hideUser, continuation };
     if (!this.state.chatTitle) this.setState({ chatTitle: text.split('\n')[0].slice(0, 80) });
+
+    if (this.state.pendingPlan && !hideUser) {
+      // Typing instead of approving means "keep planning".
+      const p = this.find(this.state.pendingPlan);
+      if (p && p.state === 'pending') this.upsert({ ...p, state: 'kept' });
+      this.setState({ pendingPlan: null });
+    }
 
     if (this.state.pendingQuestions && !hideUser) {
       // The user typed a message instead of using the question card.
@@ -628,6 +711,7 @@ class BridgeController {
         effort: this.state.effort,
         mode: effectiveMode === 'plan' ? 'plan' : 'default',
         skills,
+        guidance: this.guidance(effectiveMode),
       });
     } catch (err) {
       this.finishActivity(activity);
@@ -648,12 +732,15 @@ class BridgeController {
     this.upsert({ id: newId(), kind: 'assistant', markdown: core.stripControl(response.explanation).trim() || '_(no answer)_', usage });
     this.setState({ todos: response.todos || [] });
 
-    if (response.questions && response.questions.length) {
+    const asked = Boolean(response.questions && response.questions.length);
+    if (asked) {
       const qid = newId();
       this.upsert({ id: qid, kind: 'questions', questions: response.questions, state: 'pending' });
       this.setState({ pendingQuestions: qid });
     } else if (effectiveMode === 'plan') {
-      this.upsert({ id: newId(), kind: 'plan-approval', state: 'pending' });
+      const pid = newId();
+      this.upsert({ id: pid, kind: 'plan-approval', state: 'pending' });
+      this.setState({ pendingPlan: pid });
     }
     let changesId = null;
     if (response.fileUpdates.length) changesId = this.showChanges(response.fileUpdates);
@@ -668,11 +755,146 @@ class BridgeController {
     }
     this.setState({ busy: false });
 
-    if (changesId && this.state.mode === 'auto') await this.applyChanges(changesId);
-    for (const id of commandIds) {
-      const entry = this.commands.get(id);
-      if (entry && this.state.allowedCommands.includes(entry.command)) await this.runCommand(id, { auto: true });
+    const step = {
+      changesId,
+      commandIds,
+      asked,
+      planned: effectiveMode === 'plan',
+      trackedTodos: Boolean(response.todosUpdated),
+      declined: false,
+      continued: false,
+      applied: false,
+      running: false,
+    };
+    if (turn === this.turn) {
+      turn.step = step;
+      await this.autoRun(step);
     }
+  }
+
+  /** What Claude needs to know about this client's loop, sent with every round. */
+  guidance(mode) {
+    if (mode === 'plan') {
+      return '[client] Plan mode. If the plan depends on a real choice (approach, library, design), ask it with "questions" first: the user answers in a popup and you continue at once. Then write the plan. Once the user approves it, you implement it step by step without further prompting.';
+    }
+    const { commandTimeoutSeconds } = autoSettings();
+    const how = {
+      agent: 'AUTO MODE: your fileUpdates are applied and your commands run immediately, without asking the user (only risky commands still need approval).',
+      auto: 'Your fileUpdates are applied immediately; commands wait for the user\'s approval.',
+      default: 'The user approves each file change and command.',
+    }[mode] || '';
+    return [
+      `[client] ${how}`,
+      'After each step the client sends you the results automatically and you continue. Work through the task step by step until it is completely done; do not stop to ask whether to continue.',
+      'If you need a decision from the user, use "questions" (shown as a popup). Never list options in "explanation" and wait for a reply.',
+      `Commands must finish on their own: no dev servers, watchers or interactive prompts${mode === 'agent' && commandTimeoutSeconds ? ` (each command is stopped after ${commandTimeoutSeconds}s)` : ''}.`,
+    ].join('\n');
+  }
+
+  /**
+   * Do what the mode allows without asking: apply the step's edits (auto-accept and
+   * auto mode) and run its commands in order (auto mode, and always-allowed ones),
+   * stopping at the first command that needs the user. Then continue if all is decided.
+   */
+  async autoRun(step) {
+    const turn = this.turn;
+    if (!turn || turn.step !== step || step.running) return;
+    step.running = true;
+    this.setState({ autoRunning: true });
+    try {
+      const mode = this.state.mode;
+      if (step.changesId && !step.applied && (mode === 'auto' || mode === 'agent')) {
+        step.applied = true;
+        await this.applyChanges(step.changesId);
+      }
+      const { askBeforeRisky, commandTimeoutSeconds } = autoSettings();
+      let failed = false;
+      for (const id of step.commandIds) {
+        const item = this.find(id);
+        const entry = this.commands.get(id);
+        if (!item || !entry) continue;
+        if (item.state === 'done' && item.code !== 0) failed = true;
+        if (item.state !== 'pending') continue;
+        if (turn.stopped || this.turn !== turn) break;
+        if (failed && this.state.mode === 'agent') {
+          this.upsert({ ...item, state: 'skipped', note: 'Not run: an earlier command failed.' });
+          this.session.report(`\`${entry.command}\` was NOT run because an earlier command in the same step failed.`);
+          continue;
+        }
+        const allowed = this.state.allowedCommands.includes(entry.command);
+        const risk = riskyReason(entry.command);
+        const autoOk = this.state.mode === 'agent' && !(askBeforeRisky && risk);
+        if (!allowed && !autoOk) {
+          if (this.state.mode === 'agent' && risk && !item.risk) this.upsert({ ...item, risk });
+          break; // later commands wait for this one
+        }
+        const result = await this.runCommand(id, {
+          auto: allowed ? 'always allowed' : 'auto mode',
+          timeoutMs: allowed ? 0 : commandTimeoutSeconds * 1000,
+        });
+        if (result && result.code !== 0) failed = true;
+      }
+    } finally {
+      step.running = false;
+      this.setState({ autoRunning: false });
+    }
+    await this.maybeContinue(step);
+  }
+
+  /** True when no card of the step waits for the user or is still running. */
+  stepSettled(step) {
+    if (step.changesId) {
+      const item = this.find(step.changesId);
+      if (item && item.files.some((f) => f.decision === 'pending')) return false;
+    }
+    return step.commandIds.every((id) => {
+      const item = this.find(id);
+      return !item || (item.state !== 'pending' && item.state !== 'running');
+    });
+  }
+
+  /** Send the step's results back to Claude so it keeps working, when that makes sense. */
+  async maybeContinue(step) {
+    const turn = this.turn;
+    if (!turn || turn.step !== step || step.continued || turn.stopped || this.state.busy) return;
+    if (step.asked || step.planned || this.state.mode === 'plan' || !this.stepSettled(step)) return;
+    const acted = Boolean(step.changesId || step.commandIds.length);
+    if (!acted) {
+      // Claude did nothing this step. Nudge it only if it is tracking a task that is not finished.
+      const open = step.trackedTodos && (this.state.todos || []).some((t) => t.status !== 'completed');
+      if (!open || turn.idle >= MAX_IDLE_CONTINUES) return;
+      turn.idle += 1;
+    } else {
+      turn.idle = 0;
+    }
+    if (step.declined && this.state.mode !== 'agent') {
+      step.continued = true;
+      this.upsert({ id: newId(), kind: 'info', text: 'Claude is waiting: you declined part of this step. Tell it what to do instead.' });
+      return;
+    }
+    const { maxSteps } = autoSettings();
+    if (turn.steps >= maxSteps) {
+      step.continued = true;
+      this.upsert({ id: newId(), kind: 'info', text: `Paused after ${turn.steps} steps (claudeBridge.autoMode.maxSteps). Send "continue" to keep going.` });
+      return;
+    }
+    step.continued = true;
+    const request = turn.request.length > 3000 ? `${turn.request.slice(0, 3000)} […]` : turn.request;
+    await this.send(
+      acted
+        ? `[continue] Automatic follow-up from the client (not typed by the user): the results of your last step are in the [client report] above. Continue the task from where you left off and fix anything that failed. When everything is done, reply with empty fileUpdates and commands and a short summary of what you did.\n\nThe task: ${request}`
+        : `[continue] Automatic follow-up from the client (not typed by the user): your task list still has open items. Carry on with the next one now, or, if the task is actually finished, mark every item completed and summarize.\n\nThe task: ${request}`,
+      { hideUser: true, continuation: true }
+    );
+  }
+
+  /** The user decided a card. If it belongs to the current step, carry on automatically. */
+  async afterUserAction(id, { declined = false } = {}) {
+    const step = this.turn && this.turn.step;
+    if (!step || (step.changesId !== id && !step.commandIds.includes(id))) return;
+    if (declined) step.declined = true;
+    this.turn.stopped = false;
+    await this.autoRun(step);
   }
 
   finishActivity(activity) {
@@ -843,14 +1065,22 @@ class BridgeController {
     }
   }
 
-  async runCommand(id, { auto = false } = {}) {
+  /** Run a command card. `auto` is the label shown when it ran without a click. Resolves with the result. */
+  async runCommand(id, { auto = '', timeoutMs = 0 } = {}) {
     const entry = this.commands.get(id);
     const item = this.find(id);
-    if (!entry || !item || item.state !== 'pending') return;
+    if (!entry || !item || item.state !== 'pending') return null;
     const controller = new AbortController();
     entry.abort = controller;
-    const live = { ...item, state: 'running', output: '', startedAt: Date.now(), auto };
+    const live = { ...item, state: 'running', output: '', startedAt: Date.now(), auto, risk: undefined };
     this.upsert(live);
+    let timedOut = false;
+    const deadline = timeoutMs > 0
+      ? setTimeout(() => {
+          timedOut = true;
+          controller.abort();
+        }, timeoutMs)
+      : null;
 
     let timer = null;
     const flush = () => {
@@ -867,11 +1097,15 @@ class BridgeController {
       },
     });
     if (timer) clearTimeout(timer);
-    const status = core.describeCommandResult(result);
+    if (deadline) clearTimeout(deadline);
+    const status = timedOut ? `stopped after ${Math.round(timeoutMs / 1000)}s (time limit)` : core.describeCommandResult(result);
     this.upsert({ ...live, state: 'done', code: result.code, status });
     entry.abort = null;
     const tail = core.stripControl(result.tail).trim();
-    this.session.report(`The user ran \`${entry.command}\` → ${status}.${tail ? `\nOutput (tail):\n${tail}` : ''}`);
+    const who = auto ? `The client ran (${auto})` : 'The user ran';
+    const hint = timedOut ? ' It did not finish in time: use commands that exit on their own (no servers or watchers).' : '';
+    this.session.report(`${who} \`${entry.command}\` → ${status}.${hint}${tail ? `\nOutput (tail):\n${tail}` : ''}`);
+    return timedOut ? { ...result, code: result.code === 0 ? null : result.code } : result;
   }
 
   skipCommand(id) {
@@ -911,7 +1145,7 @@ class BridgeController {
     });
     this.upsert({ ...item, state: 'answered', answers: clean });
     this.setState({ pendingQuestions: null });
-    await this.send(core.formatAnswers(item.questions, clean), { hideUser: true });
+    await this.send(core.formatAnswers(item.questions, clean), { hideUser: true, continuation: true });
   }
 
   async skipQuestions(id) {
@@ -919,7 +1153,7 @@ class BridgeController {
     if (!item || item.kind !== 'questions' || item.state !== 'pending' || this.state.busy) return;
     this.upsert({ ...item, state: 'skipped' });
     this.setState({ pendingQuestions: null });
-    await this.send('[answers]\nThe user skipped your questions. Continue with your best judgement and say which assumptions you made.', { hideUser: true });
+    await this.send('[answers]\nThe user skipped your questions. Continue with your best judgement and say which assumptions you made.', { hideUser: true, continuation: true });
   }
 
   /** Plan mode: the user approved (or not) the plan Claude wrote. */
@@ -928,18 +1162,42 @@ class BridgeController {
     if (!item || item.state !== 'pending') return;
     if (decision === 'keep') {
       this.upsert({ ...item, state: 'kept' });
+      this.setState({ pendingPlan: null });
       return;
     }
-    const mode = decision === 'auto' ? 'auto' : 'default';
-    this.upsert({ ...item, state: decision === 'auto' ? 'approved-auto' : 'approved' });
-    await this.setMode(mode);
-    await this.send('The plan is approved. Go ahead and implement it.');
+    const mode = { auto: 'auto', agent: 'agent' }[decision] || 'default';
+    if (!(await this.setMode(mode))) return; // the user cancelled the auto-mode warning
+    this.upsert({ ...item, state: { auto: 'approved-auto', agent: 'approved-agent' }[decision] || 'approved' });
+    this.setState({ pendingPlan: null });
+    await this.send('[plan approved] The user approved your plan. Implement it now, step by step, until it is completely done. Keep the task list up to date.', { hideUser: true, continuation: true });
   }
 
+  /** Switch mode. Auto mode asks for confirmation once. Resolves false if the switch was cancelled. */
   async setMode(mode) {
-    if (!MODES.includes(mode)) return;
+    if (!MODES.includes(mode)) return false;
+    if (mode === 'agent' && this.state.mode !== 'agent' && !this.context.globalState.get(AUTO_MODE_OK_KEY)) {
+      const choice = await vscode.window.showWarningMessage(
+        'Turn on auto mode?',
+        {
+          modal: true,
+          detail:
+            'Claude will edit files and run commands in this workspace without asking you first, and keep going until the task is done. ' +
+            'Risky commands (sudo, git push, deleting outside the project, publishing…) still ask. Press Esc or Stop at any time; edits can be undone.',
+        },
+        'Turn on auto mode'
+      );
+      if (choice !== 'Turn on auto mode') {
+        this.setState({ mode: this.state.mode });
+        return false;
+      }
+      await this.context.globalState.update(AUTO_MODE_OK_KEY, true);
+    }
     await this.context.workspaceState.update(MODE_KEY, mode);
     this.setState({ mode });
+    // Switching to a mode that does more on its own picks up the step that is waiting.
+    const step = this.turn && this.turn.step;
+    if (step && !this.state.busy && (mode === 'auto' || mode === 'agent') && !this.stepSettled(step)) await this.autoRun(step);
+    return true;
   }
 
   async setModel(model, effort) {
@@ -1029,7 +1287,8 @@ class BridgeController {
     if (this.session) this.session.clear();
     this.ensureProject();
     this.post({ type: 'reset', items: [] });
-    this.setState({ busy: false, todos: [], chatTitle: '', pendingQuestions: null });
+    this.turn = null;
+    this.setState({ busy: false, todos: [], chatTitle: '', pendingQuestions: null, pendingPlan: null, autoRunning: false });
   }
 
   /** Put "@path" (with the selected lines, if any) into the message box. */
@@ -1079,10 +1338,17 @@ class BridgeController {
         if (typeof message.text === 'string' && message.text.trim()) await this.send(message.text.trim());
         break;
       case 'retry':
-        if (this.lastPrompt) await this.send(this.lastPrompt);
+        if (this.lastPrompt) await this.send(this.lastPrompt, this.lastOptions || {});
         break;
       case 'stop':
+        if (this.turn) this.turn.stopped = true;
         if (this.abort) this.abort.abort();
+        else if (this.turn && this.turn.step) {
+          for (const id of this.turn.step.commandIds) {
+            const entry = this.commands.get(id);
+            if (entry && entry.abort) entry.abort.abort();
+          }
+        }
         break;
       case 'connect':
         await this.connect(message.link, message.code);
@@ -1145,9 +1411,11 @@ class BridgeController {
         break;
       case 'apply':
         await this.applyChanges(message.id, message.path);
+        await this.afterUserAction(message.id);
         break;
       case 'reject':
         this.rejectChanges(message.id, message.path);
+        await this.afterUserAction(message.id, { declined: true });
         break;
       case 'undo':
         await this.undoChanges(message.id);
@@ -1163,15 +1431,18 @@ class BridgeController {
         break;
       case 'run':
         await this.runCommand(message.id);
+        await this.afterUserAction(message.id);
         break;
       case 'allow-command':
         await this.allowCommand(message.id);
+        await this.afterUserAction(message.id);
         break;
       case 'remove-allowed':
         await this.removeAllowed(String(message.command));
         break;
       case 'skip':
         this.skipCommand(message.id);
+        await this.afterUserAction(message.id, { declined: true });
         break;
       case 'stop-command': {
         const entry = this.commands.get(message.id);
@@ -1253,6 +1524,7 @@ function activate(context) {
       const next = MODES[(MODES.indexOf(controller.state.mode) + 1) % MODES.length];
       return controller.setMode(next);
     }),
+    vscode.commands.registerCommand('claudeBridge.autoMode', () => controller.setMode('agent')),
     vscode.commands.registerCommand('claudeBridge.undoLast', () => controller.undoLast()),
     vscode.commands.registerCommand('claudeBridge.changeModel', () => controller.pickModel()),
     vscode.commands.registerCommand('claudeBridge.skills', () => controller.pickSkills()),

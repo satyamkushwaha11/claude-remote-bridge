@@ -985,8 +985,9 @@ class Session {
    * Resolves with { explanation, fileUpdates, commands, explored: { reads, searches }, rounds }.
    * `options.extraFiles` are put in view first (e.g. the file open in the editor).
    * `options.editorContext` is a note about the user's editor (open file, selection).
+   * `options.guidance` is extra instructions from the client for every round (e.g. how its agent loop works).
    */
-  async send(prompt, { onEvent = () => {}, signal, extraFiles = [], editorContext = '', model = '', effort = '', mode = 'default', skills = [] } = {}) {
+  async send(prompt, { onEvent = () => {}, signal, extraFiles = [], editorContext = '', model = '', effort = '', mode = 'default', skills = [], guidance = '' } = {}) {
     const skillPayload = skills.map((k) => ({ name: k.name, instructions: k.instructions }));
     const planning = mode === 'plan';
     const compacting = mode === 'compact';
@@ -1016,6 +1017,7 @@ class Session {
       const { files, dropped } = this.collectFiles();
 
       const notes = [];
+      if (guidance) notes.push(guidance);
       if (tree2.truncated) notes.push(`The project tree was cut off after ${LIMITS.treeEntries} files.`);
       if (trail.length > 0) notes.push('Earlier in this message:', ...trail);
       if (searchNotes.length > 0) notes.push(...searchNotes);
@@ -1126,6 +1128,7 @@ class Session {
         commands: response.commands,
         questions: response.questions,
         todos: this.todos,
+        todosUpdated: response.todos.length > 0,
         explored,
         rounds: round,
         usage,

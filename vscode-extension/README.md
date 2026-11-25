@@ -22,7 +22,7 @@ The access code is kept in VS Code's secret storage and is never sent: it encryp
 | Review a change | Expand the file row, or click the diff icon to open VS Code's diff editor |
 | Apply or discard | **Accept all** / **Reject all** on the changes card |
 | Run a suggested command | **Run** / **Skip** on the command card |
-| Switch mode (ask / auto-accept / plan) | Mode chip, or Shift+Tab in the message box |
+| Switch mode (ask / auto-accept / auto / plan) | Mode chip, Shift+Tab in the message box, `/auto`, or **Claude Bridge: Turn On Auto Mode** |
 | Choose model and effort | Model chip, `/model`, or Ctrl+Alt+Shift+M (**Claude Bridge: Change Model**) |
 | Accept or reject per file | ✓ / ✗ on each file row |
 | Undo applied changes | **Undo** on the card, or `/undo` |
